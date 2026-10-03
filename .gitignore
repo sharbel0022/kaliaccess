@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.log
+*.pem
+*.crt
+*.key
+*.pfx
+*.p12
+.pytest_cache/
+.coverage
+.DS_Store
+
+# Local Kali client state (contains trusted public certificate/config, never passwords)
+.kaliaccess/
