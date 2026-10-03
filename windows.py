@@ -81,8 +81,8 @@ Write-Host '[2/6] Waiting for the sshd service to become available...'
 
 $sshd = Get-SshdService
 
-for ($i = 0; $i -lt 30 -and -not $sshd; $i++) {{
-    Start-Sleep -Seconds 1
+for ($i = 0; $i -lt 5 -and -not $sshd; $i++) {{
+    Start-Sleep -Milliseconds 500
     $sshd = Get-SshdService
 }}
 
