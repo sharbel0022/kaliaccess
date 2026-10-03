@@ -36,10 +36,38 @@ def restart_as_admin():
         raise RuntimeError("Could not request Administrator permission.")
 
 
+def get_powershell_exe():
+    windir = os.environ.get("WINDIR", r"C:\\Windows")
+
+    candidates = [
+        os.path.join(
+            windir,
+            "Sysnative",
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe",
+        ),
+        os.path.join(
+            windir,
+            "System32",
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe",
+        ),
+        "powershell.exe",
+    ]
+
+    for candidate in candidates:
+        if candidate == "powershell.exe" or os.path.exists(candidate):
+            return candidate
+
+    return "powershell.exe"
+
+
 def run_powershell(command, capture=False):
     return subprocess.run(
         [
-            "powershell.exe",
+            get_powershell_exe(),
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
@@ -68,31 +96,70 @@ if (-not $server) {{
     throw 'OpenSSH Server is not available as a Windows capability.'
 }}
 
+ $restartNeeded = $false
+
 if ($server.State -ne 'Installed') {{
+    Write-Host ('Current OpenSSH state: ' + $server.State)
     Write-Host 'Installing OpenSSH Server. This can take a moment...'
+
     $installResult = Add-WindowsCapability -Online -Name $server.Name
 
     if (-not $installResult) {{
         throw 'Windows did not return a result from the OpenSSH Server installation.'
     }}
+
+    $restartNeeded = [bool]$installResult.RestartNeeded
+
+    # Refresh capability state after DISM/Windows Update has completed.
+    for ($i = 0; $i -lt 15; $i++) {{
+        $server = Get-WindowsCapability -Online -Name $server.Name
+        if ($server.State -eq 'Installed') {{
+            break
+        }}
+        Start-Sleep -Seconds 1
+    }}
 }}
 
-Write-Host '[2/6] Waiting for the sshd service to become available...'
+Write-Host '[2/6] Waiting for the sshd service and executable...'
 
 $sshd = Get-SshdService
 
-for ($i = 0; $i -lt 5 -and -not $sshd; $i++) {{
+for ($i = 0; $i -lt 10 -and -not $sshd; $i++) {{
     Start-Sleep -Milliseconds 500
     $sshd = Get-SshdService
 }}
 
-$sshdExe = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
-$keygenExe = Join-Path $env:WINDIR 'System32\OpenSSH\ssh-keygen.exe'
-$sshDataDir = Join-Path $env:ProgramData 'ssh'
+$systemDir = [Environment]::GetFolderPath('System')
+$sshdCandidates = @(
+    (Join-Path $systemDir 'OpenSSH\sshd.exe'),
+    (Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'),
+    (Join-Path $env:WINDIR 'Sysnative\OpenSSH\sshd.exe'),
+    (Join-Path $env:ProgramFiles 'OpenSSH\sshd.exe')
+)
 
-if (-not (Test-Path $sshdExe)) {{
-    throw "OpenSSH Server installation completed, but sshd.exe was not found at $sshdExe."
+$command = Get-Command sshd.exe -ErrorAction SilentlyContinue
+if ($command -and $command.Source) {{
+    $sshdCandidates += $command.Source
 }}
+
+$sshdExe = $sshdCandidates |
+    Where-Object {{ $_ -and (Test-Path $_) }} |
+    Select-Object -First 1
+
+if (-not $sshdExe) {{
+    $server = Get-WindowsCapability -Online -Name $server.Name
+
+    if ($restartNeeded -or $server.State -match 'Pending') {{
+        Write-Output 'KALIACCESS_REBOOT_REQUIRED=1'
+        Write-Output ('KALIACCESS_OPENSSH_STATE=' + $server.State)
+        exit 0
+    }}
+
+    throw ("OpenSSH Server did not become available. Capability state: " + $server.State + ". A Windows restart or Windows component repair may be required.")
+}}
+
+$keygenExe = Join-Path (Split-Path $sshdExe -Parent) 'ssh-keygen.exe'
+$sshDataDir = Join-Path $env:ProgramData 'ssh'
 
 New-Item -ItemType Directory -Path $sshDataDir -Force | Out-Null
 
@@ -333,6 +400,34 @@ def main():
 
     try:
         info = configure_windows()
+
+        if info.get("KALIACCESS_REBOOT_REQUIRED") == "1":
+            print()
+            print("Windows must restart once to finish installing OpenSSH.")
+            print(
+                "OpenSSH state:",
+                info.get("KALIACCESS_OPENSSH_STATE", "pending"),
+            )
+            answer = input("Restart Windows now? [Y/n]: ").strip().lower()
+
+            if answer in ("", "y", "yes"):
+                subprocess.run(
+                    [
+                        "shutdown.exe",
+                        "/r",
+                        "/t",
+                        "5",
+                        "/c",
+                        "KaliAccess: finishing OpenSSH installation",
+                    ],
+                    check=False,
+                )
+                print("Windows will restart in 5 seconds.")
+            else:
+                print("Restart Windows manually, then run windows.py again.")
+
+            return 0
+
         interfaces = get_interfaces()
     except subprocess.CalledProcessError as exc:
         print("Setup failed.")
