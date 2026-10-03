@@ -56,31 +56,100 @@ def configure_windows():
     ps = rf"""
 $ErrorActionPreference = 'Stop'
 
-Write-Host '[1/5] Checking OpenSSH...'
+function Get-SshdService {{
+    return Get-Service -Name 'sshd' -ErrorAction SilentlyContinue
+}}
 
-$sshd = Get-Service sshd -ErrorAction SilentlyContinue
-if (-not $sshd) {{
-    $server = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*' | Select-Object -First 1
-    if (-not $server) {{
-        throw 'OpenSSH Server is not available as a Windows capability.'
-    }}
-    if ($server.State -ne 'Installed') {{
-        Write-Host 'Installing OpenSSH Server...'
-        Add-WindowsCapability -Online -Name $server.Name | Out-Null
+Write-Host '[1/6] Checking OpenSSH Server...'
+
+$server = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*' | Select-Object -First 1
+
+if (-not $server) {{
+    throw 'OpenSSH Server is not available as a Windows capability.'
+}}
+
+if ($server.State -ne 'Installed') {{
+    Write-Host 'Installing OpenSSH Server. This can take a moment...'
+    $installResult = Add-WindowsCapability -Online -Name $server.Name
+
+    if (-not $installResult) {{
+        throw 'Windows did not return a result from the OpenSSH Server installation.'
     }}
 }}
 
+Write-Host '[2/6] Waiting for the sshd service to become available...'
+
+$sshd = Get-SshdService
+
+for ($i = 0; $i -lt 30 -and -not $sshd; $i++) {{
+    Start-Sleep -Seconds 1
+    $sshd = Get-SshdService
+}}
+
+$sshdExe = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
+$keygenExe = Join-Path $env:WINDIR 'System32\OpenSSH\ssh-keygen.exe'
+$sshDataDir = Join-Path $env:ProgramData 'ssh'
+
+if (-not (Test-Path $sshdExe)) {{
+    throw "OpenSSH Server installation completed, but sshd.exe was not found at $sshdExe."
+}}
+
+New-Item -ItemType Directory -Path $sshDataDir -Force | Out-Null
+
+if (Test-Path $keygenExe) {{
+    & $keygenExe -A | Out-Null
+}}
+
+if (-not $sshd) {{
+    Write-Host 'sshd service was not registered by Windows. Registering it now...'
+    New-Service -Name 'sshd' -BinaryPathName ('"' + $sshdExe + '"') -DisplayName 'OpenSSH SSH Server' -Description 'OpenSSH SSH Server' -StartupType Automatic | Out-Null
+    Start-Sleep -Seconds 1
+    $sshd = Get-SshdService
+}}
+
+if (-not $sshd) {{
+    throw 'OpenSSH Server is installed, but the sshd service could not be registered.'
+}}
+
 $client = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Client*' | Select-Object -First 1
+
 if ($client -and $client.State -ne 'Installed') {{
     Write-Host 'Installing OpenSSH Client...'
     Add-WindowsCapability -Online -Name $client.Name | Out-Null
 }}
 
-Write-Host '[2/5] Starting SSH background service...'
-Set-Service -Name sshd -StartupType Automatic
-Start-Service sshd
+Write-Host '[3/6] Starting SSH background service...'
+
+Set-Service -Name 'sshd' -StartupType Automatic
+
+try {{
+    Start-Service -Name 'sshd' -ErrorAction Stop
+}} catch {{
+    $diagnostic = ''
+    try {{
+        $diagnostic = (& $sshdExe -t 2>&1 | Out-String).Trim()
+    }} catch {{
+        $diagnostic = $_.Exception.Message
+    }}
+
+    if ($diagnostic) {{
+        throw "sshd could not start. Validation result: $diagnostic"
+    }}
+
+    throw "sshd could not start: $($_.Exception.Message)"
+}}
+
+$sshListening = $false
+
+for ($i = 0; $i -lt 15 -and -not $sshListening; $i++) {{
+    $sshListening = [bool](Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)
+    if (-not $sshListening) {{
+        Start-Sleep -Milliseconds 500
+    }}
+}}
 
 $sshRule = Get-NetFirewallRule -Name '{SSH_RULE}' -ErrorAction SilentlyContinue
+
 if ($sshRule) {{
     Set-NetFirewallRule -Name '{SSH_RULE}' -Enabled True -Direction Inbound -Action Allow -Profile Any | Out-Null
     $sshRule = Get-NetFirewallRule -Name '{SSH_RULE}'
@@ -94,15 +163,17 @@ if ($defaultSsh) {{
     Disable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' | Out-Null
 }}
 
-Write-Host '[3/5] Checking Remote Desktop support...'
+Write-Host '[4/6] Checking Remote Desktop support...'
+
 $productName = (Get-ComputerInfo -Property WindowsProductName).WindowsProductName
 $rdpSupported = [bool]($productName -match 'Pro|Professional|Enterprise|Education|Server')
 $rdpRunning = $false
 
 if ($rdpSupported) {{
-    Write-Host '[4/5] Enabling authenticated Remote Desktop...'
-    Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name 'fDenyTSConnections' -Type DWord -Value 0
-    Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name 'UserAuthentication' -Type DWord -Value 1
+    Write-Host '[5/6] Enabling authenticated Remote Desktop...'
+
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Type DWord -Value 0
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Type DWord -Value 1
 
     foreach ($item in @(
         @('{RDP_TCP_RULE}', 'TCP'),
@@ -124,11 +195,12 @@ if ($rdpSupported) {{
     Start-Service TermService -ErrorAction SilentlyContinue
     $rdpRunning = [bool]((Get-Service TermService -ErrorAction SilentlyContinue).Status -eq 'Running')
 }} else {{
-    Write-Host '[4/5] Windows edition cannot host built-in RDP. Skipping RDP.'
+    Write-Host '[5/6] Windows edition cannot host built-in RDP. Skipping RDP.'
 }}
 
-Write-Host '[5/5] Verifying SSH...'
-$sshRunning = [bool]((Get-Service sshd).Status -eq 'Running')
+Write-Host '[6/6] Verifying services...'
+
+$sshRunning = [bool]((Get-Service sshd -ErrorAction SilentlyContinue).Status -eq 'Running')
 $sshListening = [bool](Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)
 
 Write-Output ('KALIACCESS_PRODUCT=' + $productName)
@@ -147,7 +219,6 @@ Write-Output ('KALIACCESS_RDP_RUNNING=' + [int]$rdpRunning)
             info[key] = value.strip()
 
     return info
-
 
 def get_interfaces():
     ps = r"""
