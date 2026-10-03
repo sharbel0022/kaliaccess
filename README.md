@@ -1,137 +1,187 @@
 # KaliAccess
 
-KaliAccess is a simple Windows + Kali Linux remote-access lab for computers you own.
+KaliAccess uses two simple Python scripts:
 
-The project uses **one Python file**:
+- `windows.py` runs on Windows
+- `kali.py` runs on Kali Linux
 
-```text
-kaliaccess.py
+The scripts automatically exchange the Windows connection information on the local network, so you do not have to manually look up the Windows IP address first.
+
+Remote access itself still uses normal authenticated SSH/SCP/SFTP and Windows Remote Desktop.
+
+## 1. Start Kali first
+
+On Kali:
+
+```bash
+git pull
+python3 kali.py
 ```
 
-It configures normal authenticated Windows services instead of a hidden reverse shell.
+The script checks that `ssh`, `scp` and `sftp` exist. If they are missing, it offers automatic installation through `openssh-client`.
 
-## What it enables
+It then waits for Windows.
 
-- SSH terminal access from Kali to Windows
-- SCP file transfer in both directions
-- SFTP
-- OpenSSH running as a Windows background service
-- Remote Desktop (RDP) when the Windows edition supports hosting RDP
-- Windows Firewall rules limited to the local subnet
+You will see something like:
 
-## 1. Run on Windows
+```text
+Waiting for windows.py on the local network...
+Listening for up to 90 seconds on UDP 45888.
+Now run windows.py on the Windows PC.
+```
 
-Clone or download the repository, then run:
+## 2. Run Windows
+
+On the Windows PC:
 
 ```powershell
-python kaliaccess.py
+git pull
+python windows.py
 ```
 
 or:
 
 ```powershell
-py kaliaccess.py
+py windows.py
 ```
 
-Windows will request Administrator permission once because installing/enabling system services requires it.
+The first run requests Administrator permission because Windows system services and firewall rules must be configured.
 
-When setup finishes, the script prints the Windows username and IPv4 address.
+The Windows script automatically:
 
-Example:
+- installs OpenSSH Server if needed
+- installs OpenSSH Client if needed
+- starts `sshd`
+- sets `sshd` to start automatically with Windows
+- opens TCP/22 only to the local subnet
+- checks all active IPv4 interfaces
+- enables normal authenticated Windows Remote Desktop when the Windows edition supports RDP hosting
+- broadcasts only the connection metadata to `kali.py` for 30 seconds
+
+The discovery broadcast contains the Windows hostname, username, local IPv4 addresses and service status. It does not provide command execution.
+
+## 3. Kali receives everything automatically
+
+When discovery succeeds, Kali shows for example:
 
 ```text
-KALIACCESS READY
+WINDOWS FOUND
 
-Windows edition : Windows 11 Pro
-Windows user    : sharbel
-Windows IP      : 192.168.1.50
-SSH background  : READY
-Remote Desktop  : READY
+Computer : WINDOWS-PC
+Windows  : Windows 11 Pro
+User     : sharbel
+IP       : 192.168.56.105
+SSH      : READY
+RDP      : READY
 ```
 
-After that, the SSH service keeps running in the background. The Python script itself does not need to stay open.
+`kali.py` automatically tests the received IP addresses and chooses one where TCP port 22 is reachable.
 
-## 2. Terminal from Kali
-
-```bash
-ssh sharbel@192.168.1.50
-```
-
-Use your actual Windows account password. A Windows Hello PIN is not an SSH password.
-
-## 3. Send a file from Kali to Windows
-
-```bash
-scp bild.jpg sharbel@192.168.1.50:Desktop/
-```
-
-Send a folder:
-
-```bash
-scp -r myfolder sharbel@192.168.1.50:Desktop/
-```
-
-## 4. Download a file from Windows to Kali
-
-```bash
-scp sharbel@192.168.1.50:Desktop/test.txt .
-```
-
-## 5. SFTP
-
-```bash
-sftp sharbel@192.168.1.50
-```
-
-Example:
+Then you get this menu:
 
 ```text
-cd Desktop
-put bild.jpg
-get test.txt
-exit
+KaliAccess
+1) SSH terminal
+2) Send file/folder Kali -> Windows
+3) Get file Windows -> Kali
+4) SFTP
+5) Windows screen (RDP)
+6) Test SSH connection
+7) Show connection info
+0) Exit
 ```
 
-## 6. Windows screen from Kali
+## SSH terminal
 
-Windows Pro, Enterprise, Education and supported Server editions can host Remote Desktop.
+Choose:
 
-On Kali, install the FreeRDP client if needed:
+```text
+1
+```
+
+This runs:
 
 ```bash
-sudo apt update
-sudo apt install freerdp3-x11 -y
+ssh WINDOWS_USER@WINDOWS_IP
 ```
 
-Then connect:
+Use your real Windows account password. Windows Hello PIN is not an SSH password.
 
-```bash
-xfreerdp3 /v:192.168.1.50 /u:sharbel /dynamic-resolution
+## Send files to Windows
+
+Choose:
+
+```text
+2
 ```
 
-Some Kali versions use the older command name:
+Enter a Kali file or folder and the script uses `scp`.
 
-```bash
-xfreerdp /v:192.168.1.50 /u:sharbel /dynamic-resolution
+Default destination:
+
+```text
+Desktop/
 ```
 
-Windows Home does not provide the built-in RDP host. KaliAccess will report this instead of trying to bypass that limitation.
+## Get files from Windows
+
+Choose:
+
+```text
+3
+```
+
+Example Windows path:
+
+```text
+Desktop/test.txt
+```
+
+The script downloads it with `scp`.
+
+## SFTP
+
+Choose:
+
+```text
+4
+```
+
+This opens an interactive SFTP session.
+
+## Windows screen
+
+Choose:
+
+```text
+5
+```
+
+If Windows supports the built-in RDP host, `kali.py` uses FreeRDP.
+
+If FreeRDP is missing, it can install:
+
+```text
+freerdp3-x11
+```
+
+Windows Home does not support Microsoft's built-in RDP host, so the script reports that instead of trying to bypass the limitation.
+
+## Background behavior
+
+After `windows.py` finishes:
+
+- OpenSSH keeps running as a normal Windows service
+- SSH continues working in the background
+- no Python process needs to stay running
+- the temporary discovery broadcast stops
+
+Run `windows.py` again whenever you want Kali to automatically rediscover the current Windows address.
 
 ## Security
 
-KaliAccess creates firewall rules for SSH and RDP that allow connections only from the Windows computer's local subnet.
+The generated SSH and RDP firewall rules are restricted to the Windows machine's local subnet.
 
-It does not create a hidden reverse shell, background command channel, keylogger or silent screen-capture agent.
+KaliAccess does not create a hidden reverse shell, covert command channel or silent screen-capture agent.
 
-For access from outside your LAN, use a private VPN/overlay network such as Tailscale rather than forwarding SSH or RDP ports directly from your router.
-
-## Security-app testing
-
-On computers you own, you can run your monitoring application on Windows while generating normal traffic from Kali:
-
-```bash
-ssh USER@WINDOWS_IP
-scp testfile.jpg USER@WINDOWS_IP:Desktop/
-```
-
-This gives you controlled SSH/TCP traffic for observing source/destination addresses, TCP port 22, packet counts and byte counts.
+For remote access outside your own LAN, use a private VPN/overlay network rather than exposing SSH or RDP directly to the public Internet.
