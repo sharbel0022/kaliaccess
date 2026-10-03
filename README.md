@@ -1,100 +1,79 @@
 # KaliAccess
 
-KaliAccess is a small Windows setup project that enables secure SSH access from a Kali Linux machine on the same local network.
+KaliAccess ar ett enkelt testprojekt for Windows + Kali Linux.
 
-It gives you:
-
-- SSH terminal access from Kali to Windows
-- SCP file transfer in both directions
-- SFTP file transfer
-- A simple way to generate real SSH/file-transfer traffic for your own security monitoring lab
-- A LocalSubnet-only Windows Firewall rule by default
-
-## Easiest setup on Windows
-
-1. Download this repository.
-2. Open the folder.
-3. Double-click:
+Projektet bestar av **en Python-fil**:
 
 ```text
-START-KALI-ACCESS.bat
+kaliaccess.py
 ```
 
-4. Accept the Windows Administrator prompt.
-5. The script prints your Windows username and local IP.
+Nar du kor filen pa Windows:
 
-Example:
+- OpenSSH Server installeras om det saknas
+- SSH-tjansten startas
+- SSH startar automatiskt med Windows
+- Windows Firewall tillater TCP/22 fran det lokala natverket
+- ditt Windows-anvandarnamn och din lokala IP visas
+
+## 1. Kor pa Windows
+
+Du behover Python installerat.
+
+Oppna PowerShell i projektmappen:
+
+```powershell
+python kaliaccess.py
+```
+
+Windows kommer att be om administratorrattigheter.
+
+Nar allt ar klart visas exempelvis:
 
 ```text
-Windows user : sharbel
-Windows IP   : 192.168.1.50
+KALIACCESS AR KLAR
+
+Windows user: sharbel
+Windows IP:   192.168.1.50
 ```
 
-## Connect from Kali
+## 2. Anslut fran Kali
 
 ```bash
 ssh sharbel@192.168.1.50
 ```
 
-Use your **actual Windows account password**, not your Windows Hello PIN.
+Anvand ditt riktiga Windows-kontolosenord, inte Windows Hello-PIN.
 
-## Send a file from Kali to Windows
-
-```bash
-scp image.jpg sharbel@192.168.1.50:Desktop/
-```
-
-Send a whole folder:
+## 3. Skicka en bild Kali -> Windows
 
 ```bash
-scp -r myfolder sharbel@192.168.1.50:Desktop/
+scp bild.jpg sharbel@192.168.1.50:Desktop/
 ```
 
-## Download a file from Windows to Kali
+## 4. Hamta en fil Windows -> Kali
 
 ```bash
-scp sharbel@192.168.1.50:Desktop/file.txt .
+scp sharbel@192.168.1.50:Desktop/test.txt .
 ```
 
-## SFTP
+## 5. SFTP
 
 ```bash
 sftp sharbel@192.168.1.50
 ```
 
-Inside SFTP:
+Exempel inne i SFTP:
 
 ```text
-ls
 cd Desktop
-put image.jpg
-get file.txt
+put bild.jpg
+get test.txt
 exit
 ```
 
-## Disable KaliAccess
+## Security-labb
 
-Run PowerShell as Administrator:
+Pa datorer du sjalv ager kan du kora din security-app pa Windows samtidigt och sedan skapa normal SSH/SCP-trafik fran Kali. Da kan appen observera bland annat TCP-port 22, IP-adresser, paket och datamangd.
 
-```powershell
-.\disable-kali-access.ps1
-```
-
-This stops `sshd`, changes it back to manual startup, and disables the KaliAccess firewall rule.
-
-## Security
-
-KaliAccess intentionally allows SSH only from the Windows machine's **local subnet**.
-
-Do not expose TCP port 22 directly to the public Internet unless you know how to harden and manage SSH securely.
-
-## Security-app testing
-
-For a controlled lab using machines you own, start your monitoring/security application on Windows and then generate normal traffic from Kali:
-
-```bash
-ssh USER@WINDOWS_IP
-scp testfile.jpg USER@WINDOWS_IP:Desktop/
-```
-
-Your monitoring application can then observe normal TCP/SSH traffic such as source/destination addresses, port 22, packet counts and byte counts.
+KaliAccess begransar brandvaggsregeln till det lokala natverket och oppnar inte SSH direkt mot Internet.
