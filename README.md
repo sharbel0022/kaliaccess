@@ -1,57 +1,77 @@
 # KaliAccess
 
-KaliAccess ar ett enkelt testprojekt for Windows + Kali Linux.
+KaliAccess is a simple Windows + Kali Linux remote-access lab for computers you own.
 
-Projektet bestar av **en Python-fil**:
+The project uses **one Python file**:
 
 ```text
 kaliaccess.py
 ```
 
-Nar du kor filen pa Windows:
+It configures normal authenticated Windows services instead of a hidden reverse shell.
 
-- OpenSSH Server installeras om det saknas
-- SSH-tjansten startas
-- SSH startar automatiskt med Windows
-- Windows Firewall tillater TCP/22 fran det lokala natverket
-- ditt Windows-anvandarnamn och din lokala IP visas
+## What it enables
 
-## 1. Kor pa Windows
+- SSH terminal access from Kali to Windows
+- SCP file transfer in both directions
+- SFTP
+- OpenSSH running as a Windows background service
+- Remote Desktop (RDP) when the Windows edition supports hosting RDP
+- Windows Firewall rules limited to the local subnet
 
-Du behover Python installerat.
+## 1. Run on Windows
 
-Oppna PowerShell i projektmappen:
+Clone or download the repository, then run:
 
 ```powershell
 python kaliaccess.py
 ```
 
-Windows kommer att be om administratorrattigheter.
+or:
 
-Nar allt ar klart visas exempelvis:
-
-```text
-KALIACCESS AR KLAR
-
-Windows user: sharbel
-Windows IP:   192.168.1.50
+```powershell
+py kaliaccess.py
 ```
 
-## 2. Anslut fran Kali
+Windows will request Administrator permission once because installing/enabling system services requires it.
+
+When setup finishes, the script prints the Windows username and IPv4 address.
+
+Example:
+
+```text
+KALIACCESS READY
+
+Windows edition : Windows 11 Pro
+Windows user    : sharbel
+Windows IP      : 192.168.1.50
+SSH background  : READY
+Remote Desktop  : READY
+```
+
+After that, the SSH service keeps running in the background. The Python script itself does not need to stay open.
+
+## 2. Terminal from Kali
 
 ```bash
 ssh sharbel@192.168.1.50
 ```
 
-Anvand ditt riktiga Windows-kontolosenord, inte Windows Hello-PIN.
+Use your actual Windows account password. A Windows Hello PIN is not an SSH password.
 
-## 3. Skicka en bild Kali -> Windows
+## 3. Send a file from Kali to Windows
 
 ```bash
 scp bild.jpg sharbel@192.168.1.50:Desktop/
 ```
 
-## 4. Hamta en fil Windows -> Kali
+Send a folder:
+
+```bash
+scp -r myfolder sharbel@192.168.1.50:Desktop/
+```
+
+## 4. Download a file from Windows to Kali
 
 ```bash
 scp sharbel@192.168.1.50:Desktop/test.txt .
@@ -63,7 +83,7 @@ scp sharbel@192.168.1.50:Desktop/test.txt .
 sftp sharbel@192.168.1.50
 ```
 
-Exempel inne i SFTP:
+Example:
 
 ```text
 cd Desktop
@@ -72,8 +92,46 @@ get test.txt
 exit
 ```
 
-## Security-labb
+## 6. Windows screen from Kali
 
-Pa datorer du sjalv ager kan du kora din security-app pa Windows samtidigt och sedan skapa normal SSH/SCP-trafik fran Kali. Da kan appen observera bland annat TCP-port 22, IP-adresser, paket och datamangd.
+Windows Pro, Enterprise, Education and supported Server editions can host Remote Desktop.
 
-KaliAccess begransar brandvaggsregeln till det lokala natverket och oppnar inte SSH direkt mot Internet.
+On Kali, install the FreeRDP client if needed:
+
+```bash
+sudo apt update
+sudo apt install freerdp3-x11 -y
+```
+
+Then connect:
+
+```bash
+xfreerdp3 /v:192.168.1.50 /u:sharbel /dynamic-resolution
+```
+
+Some Kali versions use the older command name:
+
+```bash
+xfreerdp /v:192.168.1.50 /u:sharbel /dynamic-resolution
+```
+
+Windows Home does not provide the built-in RDP host. KaliAccess will report this instead of trying to bypass that limitation.
+
+## Security
+
+KaliAccess creates firewall rules for SSH and RDP that allow connections only from the Windows computer's local subnet.
+
+It does not create a hidden reverse shell, background command channel, keylogger or silent screen-capture agent.
+
+For access from outside your LAN, use a private VPN/overlay network such as Tailscale rather than forwarding SSH or RDP ports directly from your router.
+
+## Security-app testing
+
+On computers you own, you can run your monitoring application on Windows while generating normal traffic from Kali:
+
+```bash
+ssh USER@WINDOWS_IP
+scp testfile.jpg USER@WINDOWS_IP:Desktop/
+```
+
+This gives you controlled SSH/TCP traffic for observing source/destination addresses, TCP port 22, packet counts and byte counts.
