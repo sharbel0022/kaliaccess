@@ -69,7 +69,7 @@ if os.name != "nt":
 
 
 if not is_admin():
-    print("Begär administratorrattigheter...")
+    print("Begar administratorrattigheter...")
     restart_as_admin()
     sys.exit(0)
 
@@ -102,11 +102,19 @@ if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) {
     $rule = Get-NetFirewallRule -Name $ruleName
     Set-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -RemoteAddress LocalSubnet
 } else {
-    New-NetFirewallRule         -Name $ruleName         -DisplayName 'KaliAccess SSH - Local subnet only'         -Direction Inbound         -Protocol TCP         -LocalPort 22         -RemoteAddress LocalSubnet         -Action Allow         -Profile Any | Out-Null
+    New-NetFirewallRule `
+        -Name $ruleName `
+        -DisplayName 'KaliAccess SSH - Local subnet only' `
+        -Direction Inbound `
+        -Protocol TCP `
+        -LocalPort 22 `
+        -RemoteAddress LocalSubnet `
+        -Action Allow `
+        -Profile Any | Out-Null
 }
 
 # Windows OpenSSH kan skapa en bredare standardregel.
-# KaliAccess använder i stället regeln ovan, som bara tillåter lokala nätverket.
+# KaliAccess anvander i stallet regeln ovan, som bara tillater lokala natverket.
 $defaultRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
 if ($defaultRule) {
     Disable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP'
@@ -148,7 +156,7 @@ print()
 print("Interaktiv filoverforing:")
 print(f"  sftp {username}@{ip}")
 print()
-print("Anvand ditt riktiga Windows-kontolosennord, inte Windows Hello-PIN.")
+print("Anvand ditt riktiga Windows-kontolosenord, inte Windows Hello-PIN.")
 print("Brandvaggen tillater SSH endast fran det lokala natverket.")
 print()
 input("Tryck Enter for att stanga...")
