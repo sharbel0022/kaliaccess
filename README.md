@@ -98,7 +98,7 @@ winctl keytest --watch
 Requirements:
 
 - Windows 11
-- Python 3 available through `py -3`
+- Python 3.10+ available through `py -3`
 - Administrator PowerShell for the one-time installation
 - An interactive Windows user account for desktop screenshots/live view
 
