@@ -55,6 +55,8 @@ New-Item -ItemType Directory -Force -Path $HelperUserRoot | Out-Null
 $TokenFile = Join-Path $HelperUserRoot "desktop-helper.token"
 [IO.File]::WriteAllText($TokenFile, $DesktopToken, $Utf8NoBom)
 
+# Allow this user to traverse the protected install root, but do not inherit that permission to service secrets.
+& icacls $InstallRoot /grant:r "*${UserSid}:(RX)" | Out-Null
 & icacls $Venv /grant:r "*${UserSid}:(OI)(CI)RX" | Out-Null
 & icacls $DesktopHelper /grant:r "*${UserSid}:RX" | Out-Null
 
