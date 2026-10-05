@@ -14,6 +14,9 @@ import socket
 import subprocess
 import sys
 import time
+import threading
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,13 +27,13 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import UploadFile
 from pydantic import BaseModel, Field
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 PROGRAM_DATA = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
 INSTALL_ROOT = PROGRAM_DATA / "KaliAccess"
 CONFIG_FILE = INSTALL_ROOT / "config.json"
@@ -183,7 +186,97 @@ class StartRequest(BaseModel):
     cwd: str | None = None
 
 
+_audit_lock = threading.Lock()
+
+
+def append_audit(method: str, path: str, status: int, client: str, duration_ms: int) -> None:
+    try:
+        target = workspace() / "logs" / "audit.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "method": method,
+            "path": path,
+            "status": status,
+            "client": client,
+            "duration_ms": duration_ms,
+        }
+        with _audit_lock:
+            if target.exists() and target.stat().st_size > 5 * 1024 * 1024:
+                rotated = target.with_suffix(".jsonl.1")
+                rotated.unlink(missing_ok=True)
+                target.replace(rotated)
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        # Audit logging must never break remote administration.
+        pass
+
+
+def recent_audit(limit: int) -> list[dict]:
+    target = workspace() / "logs" / "audit.jsonl"
+    if not target.exists():
+        return []
+    with _audit_lock:
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]
+    rows = []
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def helper_request(path: str, timeout: float = 5.0) -> tuple[bytes, str]:
+    cfg = load_config()
+    token = cfg.get("desktop_helper_token")
+    if not token:
+        raise HTTPException(503, "Desktop helper is not configured. Re-run windows_agent/install.ps1.")
+    port = int(cfg.get("desktop_helper_port", 8766))
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        headers={"X-KaliAccess-Helper-Token": token},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read(), response.headers.get_content_type()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(503, f"Desktop helper error: {detail or exc.reason}")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise HTTPException(
+            503,
+            "Desktop helper is offline. Sign in to Windows and ensure 'KaliAccess Desktop Helper' is running.",
+        ) from exc
+
+
+def helper_json(path: str, timeout: float = 5.0) -> dict:
+    body, _ = helper_request(path, timeout=timeout)
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(502, "Desktop helper returned invalid JSON") from exc
+
+
 app = FastAPI(title="KaliAccess Agent", version=VERSION, docs_url=None, redoc_url=None)
+
+
+@app.middleware("http")
+async def audit_requests(request: Request, call_next):
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        path = request.url.path
+        if request.method != "GET" or path == "/api/files/download":
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            client = request.client.host if request.client else "unknown"
+            append_audit(request.method, path, status_code, client, duration_ms)
 
 
 @app.get("/api/info")
@@ -216,6 +309,33 @@ def status(_: str = Depends(require_auth)) -> dict:
         "python_available": shutil.which("python.exe") is not None or shutil.which("python") is not None,
         "agent_version": VERSION,
     }
+
+
+@app.get("/api/desktop/status")
+def api_desktop_status(_: str = Depends(require_auth)) -> dict:
+    return helper_json("/status")
+
+
+@app.get("/api/desktop/screenshot")
+def api_desktop_screenshot(_: str = Depends(require_auth)) -> Response:
+    body, _ = helper_request("/screenshot", timeout=10.0)
+    return Response(content=body, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/keytest/events")
+def api_keytest_events(
+    limit: int = Query(default=100, ge=1, le=500),
+    _: str = Depends(require_auth),
+) -> dict:
+    return helper_json(f"/keyevents?limit={limit}")
+
+
+@app.get("/api/logs/audit")
+def api_audit_logs(
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: str = Depends(require_auth),
+) -> dict:
+    return {"events": recent_audit(limit)}
 
 
 @app.post("/api/run")
