@@ -9,6 +9,9 @@ import os
 import ssl
 import sys
 import tempfile
+import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +20,7 @@ from requests.adapters import HTTPAdapter
 from rich.console import Console
 from rich.table import Table
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 CONFIG_DIR = Path.home() / ".config" / "kaliaccess"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CERT_FILE = CONFIG_DIR / "windows-agent.crt"
@@ -263,6 +266,141 @@ def process_list(client: Client) -> None:
     console.print(table)
 
 
+def show_desktop_status(client: Client) -> None:
+    data = client.get("/api/desktop/status")
+    console.print(f"[green]Desktop helper ONLINE[/green] user={data['user']} session={data['session']} version={data['version']}")
+    console.print(f"Key-event test buffer: {data['keytest_events']} event(s)")
+
+
+def save_screenshot(client: Client, output: str | None) -> Path:
+    response = client.request("GET", "/api/desktop/screenshot", timeout=20)
+    if response.headers.get("content-type", "").split(";", 1)[0].lower() != "image/png":
+        raise SystemExit("Desktop helper did not return a PNG image")
+    target = Path(output) if output else Path(f"kaliaccess-screen-{time.strftime('%Y%m%d-%H%M%S')}.png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(response.content)
+    console.print(f"[green]Screenshot saved[/green] {target.resolve()}")
+    return target
+
+
+def live_screen(client: Client, interval: float) -> None:
+    interval_ms = max(250, int(interval * 1000))
+
+    class ScreenHandler(BaseHTTPRequestHandler):
+        def log_message(self, _format, *args):
+            return
+
+        def do_GET(self):
+            if self.path == "/" or self.path.startswith("/?"):
+                html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>KaliAccess Live Screen</title>
+<style>
+html,body{{margin:0;background:#111;color:#eee;font-family:sans-serif;height:100%;}}
+main{{display:flex;flex-direction:column;height:100%;}}
+header{{padding:10px 14px;background:#1b1b1b;}}
+img{{display:block;max-width:100%;max-height:calc(100vh - 46px);margin:auto;object-fit:contain;}}
+</style>
+</head>
+<body>
+<main>
+<header>KaliAccess live screen - read-only view</header>
+<img id="screen" src="/frame">
+</main>
+<script>
+const img=document.getElementById('screen');
+setInterval(()=>{{img.src='/frame?t='+Date.now();}}, {interval_ms});
+</script>
+</body>
+</html>""".encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(html)
+                return
+
+            if self.path.startswith("/frame"):
+                try:
+                    response = client.request("GET", "/api/desktop/screenshot", timeout=20)
+                    body = response.content
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                except SystemExit as exc:
+                    body = str(exc).encode("utf-8", errors="replace")
+                    self.send_response(502)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                return
+
+            self.send_error(404)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ScreenHandler)
+    url = f"http://127.0.0.1:{server.server_port}/"
+    console.print(f"[green]Live screen viewer[/green] {url}")
+    console.print("Read-only view. Press Ctrl+C here to stop it.")
+    webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        server.server_close()
+
+
+def show_keytest(client: Client, limit: int, watch: bool) -> None:
+    console.print("[yellow]Safe test mode:[/yellow] only keys typed in the visible Windows KaliAccess key-event test window are available.")
+    seen: set[tuple[str, str, str]] = set()
+
+    def fetch() -> list[dict]:
+        return client.request("GET", "/api/keytest/events", params={"limit": limit}).json()["events"]
+
+    if not watch:
+        rows = fetch()
+        table = Table("Time", "Key", "Character")
+        for item in rows:
+            table.add_row(item.get("time", ""), item.get("keysym", ""), item.get("char", ""))
+        console.print(table)
+        return
+
+    console.print("Watching for new test events. Press Ctrl+C to stop.")
+    try:
+        while True:
+            for item in fetch():
+                key = (item.get("time", ""), item.get("keysym", ""), item.get("char", ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                console.print(f"{key[0]}  key={key[1]!r} char={key[2]!r}")
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print()
+
+
+def show_audit(client: Client, limit: int) -> None:
+    rows = client.request("GET", "/api/logs/audit", params={"limit": limit}).json()["events"]
+    table = Table("Time", "Method", "Path", "Status", "Client", "ms")
+    for item in rows:
+        table.add_row(
+            str(item.get("time", "")),
+            str(item.get("method", "")),
+            str(item.get("path", "")),
+            str(item.get("status", "")),
+            str(item.get("client", "")),
+            str(item.get("duration_ms", "")),
+        )
+    console.print(table)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="winctl", description="Control your Windows PC from Kali using KaliAccess")
     parser.add_argument("--version", action="version", version=VERSION)
@@ -276,6 +414,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("ping")
     sub.add_parser("status")
+    sub.add_parser("desktop-status", help="Check the signed-in Windows desktop helper")
+
+    p = sub.add_parser("screenshot", help="Capture the signed-in Windows desktop")
+    p.add_argument("output", nargs="?")
+
+    p = sub.add_parser("screen", help="Open a read-only live screen viewer in your Kali browser")
+    p.add_argument("--interval", type=float, default=0.8, help="Refresh interval in seconds (minimum 0.25)")
+
+    p = sub.add_parser("keytest", help="Read events from the visible Windows key-event test window")
+    p.add_argument("--limit", type=int, default=100)
+    p.add_argument("--watch", action="store_true")
+
+    p = sub.add_parser("logs", help="Show recent authenticated agent audit events")
+    p.add_argument("--limit", type=int, default=100)
 
     p = sub.add_parser("run")
     p.add_argument("command")
@@ -323,6 +475,16 @@ def main() -> None:
         console.print(f"[green]ONLINE[/green] {data['hostname']} agent={data['version']}")
     elif args.action == "status":
         show_status(client)
+    elif args.action == "desktop-status":
+        show_desktop_status(client)
+    elif args.action == "screenshot":
+        save_screenshot(client, args.output)
+    elif args.action == "screen":
+        live_screen(client, args.interval)
+    elif args.action == "keytest":
+        show_keytest(client, max(1, min(args.limit, 500)), args.watch)
+    elif args.action == "logs":
+        show_audit(client, max(1, min(args.limit, 1000)))
     elif args.action == "run":
         data = run_remote(client, args.command, args.shell, args.cwd, args.timeout)
         raise SystemExit(data.get("exit_code", 0))
