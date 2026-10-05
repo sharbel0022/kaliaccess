@@ -5,3 +5,4 @@ bcrypt>=4.3,<5
 cryptography>=45,<47
 python-multipart>=0.0.20,<1
 pywin32>=311; platform_system == "Windows"
+mss>=10,<11
