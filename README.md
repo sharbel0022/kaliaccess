@@ -347,6 +347,25 @@ Remove the service program files too:
 
 `C:\KaliAccess` is intentionally not deleted automatically.
 
+
+## Malware-behavior learning lab
+
+KaliAccess includes a safe learning lab for studying concepts commonly associated with malware **without implementing system-wide keylogging, stealth, anti-VM execution gating or evasion**.
+
+Commands:
+
+```bash
+winctl keytest --watch
+winctl lab-environment
+winctl lab-visibility
+```
+
+- `keytest` only receives events typed into the visible KaliAccess test window.
+- `lab-environment` reports ordinary Windows system/virtualization metadata but never changes program behavior based on it.
+- `lab-visibility` shows the KaliAccess Windows service and Desktop Helper scheduled task so you can study persistence artifacts from a defender's perspective.
+- `detections/kaliaccess_lab_sigma.yml` contains an example defensive detection rule.
+- `docs/LEARNING_LAB.md` contains the full exercise.
+
 ## Development checks
 
 Python syntax:
