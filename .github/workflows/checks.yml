@@ -1,0 +1,27 @@
+name: KaliAccess checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-agent.txt -r requirements-client.txt
+      - name: Compile Python sources
+        run: python -m compileall -q windows_agent kali_client
+      - name: CLI smoke checks
+        run: |
+          python kali_client/winctl.py --help
+          python windows_agent/agent.py --help
+          python windows_agent/desktop_helper.py --help
