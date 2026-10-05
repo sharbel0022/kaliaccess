@@ -33,7 +33,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import UploadFile
 from pydantic import BaseModel, Field
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 PROGRAM_DATA = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
 INSTALL_ROOT = PROGRAM_DATA / "KaliAccess"
 CONFIG_FILE = INSTALL_ROOT / "config.json"
@@ -260,6 +260,85 @@ def helper_json(path: str, timeout: float = 5.0) -> dict:
         raise HTTPException(502, "Desktop helper returned invalid JSON") from exc
 
 
+def powershell_json(script: str, timeout: int = 15) -> dict:
+    command = [
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$ErrorActionPreference='Stop'; " + script + " | ConvertTo-Json -Depth 5 -Compress",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise HTTPException(503, f"Windows learning-lab query failed: {exc}") from exc
+    if result.returncode != 0:
+        raise HTTPException(503, (result.stderr or "Windows learning-lab query failed").strip())
+    raw = result.stdout.strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(502, "Windows learning-lab query returned invalid JSON") from exc
+    return value if isinstance(value, dict) else {"value": value}
+
+
+def lab_environment() -> dict:
+    script = r"""
+$cs = Get-CimInstance Win32_ComputerSystem
+$bios = Get-CimInstance Win32_BIOS
+$ci = Get-ComputerInfo
+[pscustomobject]@{
+  ComputerName = $env:COMPUTERNAME
+  Manufacturer = $cs.Manufacturer
+  Model = $cs.Model
+  BIOSManufacturer = $bios.Manufacturer
+  BIOSVersion = ($bios.SMBIOSBIOSVersion -join ', ')
+  HypervisorPresent = [bool]$ci.HyperVisorPresent
+}
+"""
+    data = powershell_json(script)
+    data["note"] = "Reporting only. KaliAccess never changes behavior based on virtualization information."
+    return data
+
+
+def lab_visibility() -> dict:
+    script = r"""
+$svc = Get-CimInstance Win32_Service -Filter "Name='KaliAccessAgent'" -ErrorAction SilentlyContinue
+$task = Get-ScheduledTask -TaskName "KaliAccess Desktop Helper" -ErrorAction SilentlyContinue
+[pscustomobject]@{
+  Service = if ($svc) {
+    [pscustomobject]@{
+      Name = $svc.Name
+      State = $svc.State
+      StartMode = $svc.StartMode
+      PathName = $svc.PathName
+    }
+  } else { $null }
+  DesktopHelperTask = if ($task) {
+    [pscustomobject]@{
+      TaskName = $task.TaskName
+      State = [string]$task.State
+      TaskPath = $task.TaskPath
+    }
+  } else { $null }
+}
+"""
+    data = powershell_json(script)
+    data["note"] = "These artifacts are intentionally visible for defensive learning; KaliAccess does not hide them."
+    return data
+
+
 app = FastAPI(title="KaliAccess Agent", version=VERSION, docs_url=None, redoc_url=None)
 
 
@@ -309,6 +388,16 @@ def status(_: str = Depends(require_auth)) -> dict:
         "python_available": shutil.which("python.exe") is not None or shutil.which("python") is not None,
         "agent_version": VERSION,
     }
+
+
+@app.get("/api/lab/environment")
+def api_lab_environment(_: str = Depends(require_auth)) -> dict:
+    return lab_environment()
+
+
+@app.get("/api/lab/visibility")
+def api_lab_visibility(_: str = Depends(require_auth)) -> dict:
+    return lab_visibility()
 
 
 @app.get("/api/desktop/status")
