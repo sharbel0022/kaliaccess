@@ -20,7 +20,7 @@ from requests.adapters import HTTPAdapter
 from rich.console import Console
 from rich.table import Table
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 CONFIG_DIR = Path.home() / ".config" / "kaliaccess"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CERT_FILE = CONFIG_DIR / "windows-agent.crt"
@@ -401,6 +401,51 @@ def show_audit(client: Client, limit: int) -> None:
     console.print(table)
 
 
+def show_lab_environment(client: Client) -> None:
+    data = client.get("/api/lab/environment")
+    table = Table("Field", "Value")
+    fields = [
+        ("Computer", data.get("ComputerName", "")),
+        ("Manufacturer", data.get("Manufacturer", "")),
+        ("Model", data.get("Model", "")),
+        ("BIOS manufacturer", data.get("BIOSManufacturer", "")),
+        ("BIOS version", data.get("BIOSVersion", "")),
+        ("Hypervisor present", data.get("HypervisorPresent", "")),
+    ]
+    for key, value in fields:
+        table.add_row(key, str(value))
+    console.print(table)
+    console.print(f"[yellow]{data.get('note', '')}[/yellow]")
+
+
+def show_lab_visibility(client: Client) -> None:
+    data = client.get("/api/lab/visibility")
+    console.print("[bold]KaliAccess persistence/visibility artifacts[/bold]")
+    service = data.get("Service")
+    task = data.get("DesktopHelperTask")
+    table = Table("Artifact", "Name", "State", "Details")
+    if service:
+        table.add_row(
+            "Windows service",
+            str(service.get("Name", "")),
+            str(service.get("State", "")),
+            f"StartMode={service.get('StartMode', '')} Path={service.get('PathName', '')}",
+        )
+    else:
+        table.add_row("Windows service", "KaliAccessAgent", "not found", "")
+    if task:
+        table.add_row(
+            "Scheduled task",
+            str(task.get("TaskName", "")),
+            str(task.get("State", "")),
+            str(task.get("TaskPath", "")),
+        )
+    else:
+        table.add_row("Scheduled task", "KaliAccess Desktop Helper", "not found", "")
+    console.print(table)
+    console.print(f"[yellow]{data.get('note', '')}[/yellow]")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="winctl", description="Control your Windows PC from Kali using KaliAccess")
     parser.add_argument("--version", action="version", version=VERSION)
@@ -428,6 +473,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("logs", help="Show recent authenticated agent audit events")
     p.add_argument("--limit", type=int, default=100)
+
+    sub.add_parser("lab-environment", help="Show ordinary Windows virtualization/environment metadata without evasion")
+    sub.add_parser("lab-visibility", help="Show KaliAccess service/task artifacts for defensive learning")
 
     p = sub.add_parser("run")
     p.add_argument("command")
@@ -485,6 +533,10 @@ def main() -> None:
         show_keytest(client, max(1, min(args.limit, 500)), args.watch)
     elif args.action == "logs":
         show_audit(client, max(1, min(args.limit, 1000)))
+    elif args.action == "lab-environment":
+        show_lab_environment(client)
+    elif args.action == "lab-visibility":
+        show_lab_visibility(client)
     elif args.action == "run":
         data = run_remote(client, args.command, args.shell, args.cwd, args.timeout)
         raise SystemExit(data.get("exit_code", 0))
