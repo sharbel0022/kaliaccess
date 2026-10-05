@@ -1,0 +1,23 @@
+title: KaliAccess Learning Lab Installation Artifacts
+id: 3dd6c4bc-1f92-4f7e-935a-14b26f343ee8
+status: experimental
+description: Detects the intentionally visible KaliAccess service or Desktop Helper task used by the learning lab.
+author: KaliAccess Learning Lab
+date: 2026-10-05
+logsource:
+  product: windows
+detection:
+  service_install:
+    EventID: 7045
+    ServiceName: 'KaliAccessAgent'
+  scheduled_task:
+    EventID: 4698
+    TaskName|contains: 'KaliAccess Desktop Helper'
+  condition: service_install or scheduled_task
+falsepositives:
+  - Expected when installing KaliAccess in an authorized lab.
+level: informational
+tags:
+  - attack.persistence
+  - attack.t1543.003
+  - attack.t1053.005
